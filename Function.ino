@@ -1,4 +1,3 @@
-
 void SERCOM0_Handler()
 {
   mySerial.IrqHandler();
