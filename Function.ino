@@ -1,3 +1,4 @@
+
 void SERCOM0_Handler()
 {
   mySerial.IrqHandler();
@@ -92,4 +93,13 @@ void Publish2(String topic , String payload)
   charpay[i]=0;
   
   mqtt.Publish(chartopic,topic.length(),charpay,payload.length());
+}
+int availableMemory() 
+{
+    // Use 1024 with ATmega168
+    int size = 2048;
+    byte *buf;
+    while ((buf = (byte *) malloc(--size)) == NULL);
+        free(buf);
+    return size;
 }
