@@ -46,8 +46,8 @@ void setup()
 }
 
 
-unsigned long previous_time = -60000*90;
-const long interval_time = 60000*90;
+unsigned long previous_time = -60000*2;
+const long interval_time = 60000*2;
 int count = 0;
 
 void loop()
@@ -60,24 +60,25 @@ void loop()
   Serial.print("GPS Starting");
   String gps_data, longitude, latitude = "";
 
-  unsigned long gps_start = millis();
+  unsigned long current_time, gps_start = millis();
   do
   {
+   delay(5000);
    Serial.print(".");
    gps_data = gps.GetPosition();
    latitude  = get_value(gps_data, ',', 1 );
    longitude = get_value(gps_data, ',', 2 );
-   delay(5000);
-  } while(latitude == "" && longitude == "" && millis()-gps_start < 300000); 
+   current_time = millis()-gps_start;
+  } while(latitude == "" && longitude == "" && current_time < 3000); 
   Serial.println("\nlatitude : " + latitude);
   Serial.println("longitude : " + longitude);
   Serial.println("GPS Started\n");
   // GPS setup
 
   
-  int           a = availableMemory();
-  uint8_t       b = random(0, 20);
-  long          c = random(0, 20);
+  float         a = float(millis())/1000.0f;
+  uint16_t      b = count/2;
+  long          c = current_time/1000;
   unsigned long d = random(0, 20);
   double        e = random(0, 20);
   float         f = random(0, 20);
@@ -92,12 +93,12 @@ void loop()
    lat = "{\"lat\": " + latitude;
    lon = ",\"lon\": " + longitude;
   }
-  String val1 = ",\"V1\": " + String(a, DEC);
+  String val1 = ",\"V1\": " + String(a, 4);
   String val2 = ",\"V2\": " + String(b, DEC);
   String val3 = ",\"V3\": " + String(c, DEC);
   String val4 = ",\"V4\": " + String(d, DEC);
-  String val5 = ",\"V5\": " + String(e, 3);
-  String val6 = ",\"V6\": " + String(f, 3);
+  String val5 = ",\"V5\": " + String(e, 1);
+  String val6 = ",\"V6\": " + String(f, 1);
   String val7 = ",\"V7\": " + String(g, DEC);
   String val8 = ",\"V8\": " + String(h, DEC);
   String val9 = ",\"V9\": " + String(i, DEC)+"}";
@@ -120,5 +121,110 @@ void loop()
  }
  Serial.print(count); Serial.print(" ");  
  count += 1;
- delay(60000*5);
+ delay(30000);
+}
+
+void SERCOM0_Handler()
+{
+  mySerial.IrqHandler();
+} 
+void wake()
+{
+  gsm.PowerOn();          Serial.println("Power[status]: on");
+  while(gsm.WaitReady()); Serial.println("Power[status]: ready");
+
+  gps.Start(); Serial.println("GPS[status]: start");
+  
+  Serial.print("Signal quality: "); Serial.println(gsm.SignalQuality());
+  Serial.print("Get operator: ");   Serial.println(gsm.GetOperator());
+  Serial.println();
+}
+void internet_connect()
+{
+  Serial.println("Set APN & Password");
+  net.Configure(APN, USER, PASS);
+
+  boolean connect = false;  
+  do
+  {
+    Serial.println("Internet connecting"); 
+    connect = net.Connect();
+  } while(!connect);
+  
+  Serial.println("Internet connected");
+  Serial.print("Get IP: "); Serial.println(net.GetIP());
+  Serial.println();
+}
+void server_connect()
+{
+  boolean connect = false;
+  do
+  {
+     Serial.println(F("Server connecting"));
+     if(mqtt.DisconnectMQTTServer())
+     {
+        mqtt.ConnectMQTTServer(mqtt_server, mqtt_port);
+     }
+     connect = mqtt.ConnectState();
+     Serial.print("Server connect[state]: ");
+     Serial.println(connect);
+     delay(2000);
+  } while(!connect); 
+  
+  Serial.println("Server connected");
+  unsigned char re_turn = mqtt.Connect(mqtt_ID, mqtt_user, mqtt_password);
+  Serial.println(mqtt.ConnectReturnCode(re_turn)); 
+  Serial.println();
+}
+String get_value(String data, char separate, int index)
+{
+  int found = 0;
+  int strIndex[] = {0, -1};
+  int maxIndex = data.length() - 1;
+
+  for (int i=0; i<=maxIndex && found<=index; i++)
+  {
+    if (data.charAt(i) == separate || i == maxIndex) 
+    {
+      found++;
+      strIndex[0] = strIndex[1] + 1;
+      strIndex[1] = (i == maxIndex) ? i + 1 : i;
+    }
+  }
+  return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
+}
+void sleep()
+{
+  net.DisConnect(); Serial.println("Server disconnected");
+  delay(1000);
+  gsm.PowerOff();   Serial.println("Power[status]: off");
+  Serial.println();
+}
+void Publish2(String topic , String payload)
+{
+  char chartopic[topic.length()+2];
+  char charpay[payload.length()+2];
+  unsigned char i=0;
+  for(i=0;i<topic.length();i++)
+  {
+    chartopic[i] = topic[i];
+  }
+  chartopic[i]=0;
+  
+  for(i=0;i<payload.length();i++)
+  {
+    charpay[i] = payload[i];
+  }
+  charpay[i]=0;
+  
+  mqtt.Publish(chartopic,topic.length(),charpay,payload.length());
+}
+int availableMemory() 
+{
+    // Use 1024 with ATmega168
+    int size = 2048;
+    byte *buf;
+    while ((buf = (byte *) malloc(--size)) == NULL);
+        free(buf);
+    return size;
 }
