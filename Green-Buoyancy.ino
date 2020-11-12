@@ -55,7 +55,6 @@ const unsigned long interval_time = minTomsec(30);
 long previous_time = -interval_time;
 float count = 0.0f;
 // interval active
-unsigned long led_prevTime = millis();
 boolean led_state = 1;
 // LED Blink
 unsigned long sleep_prevTime = millis();
@@ -69,19 +68,19 @@ void loop()
   previous_time = millis();
   wake(); // UC20 wake up  
 
-
+  
   Serial.print("GPS Starting");
   String gps_data, longitude, latitude = "";
   unsigned long gps_time, gps_start = millis();
   do
   {
-   delay(random(3000, 9000));
+   delay(3000);
    Serial.print(".");
    gps_data = gps.GetPosition();
    latitude  = get_value(gps_data, ',', 1 );
    longitude = get_value(gps_data, ',', 2 );
    gps_time = millis()-gps_start;
-  } while(latitude == "" && longitude == "" && gps_time < 3000); 
+  } while(latitude == "" && longitude == "" && gps_time < 300000); 
   Serial.println("\nlatitude : " + latitude);
   Serial.println("longitude : " + longitude);
   Serial.println("GPS Started\n");
@@ -121,22 +120,43 @@ void loop()
   mqtt.Publish("data2", payload[1]);
   Serial.println("Published Success");
   // send data
+  
 
+  /*internet_connect(); server_connect();
+  
+  mqtt.callback = callback;
+  
+  while(1)
+  {
+    
+    char x[2] = {'q','w'};
+    
+    
+    
+    mqtt.Subscribe("earth");
+    if(gsm.available())
+    {
+      Serial.write(gsm.read());
+      // mqtt.callback("earth",, '5');
+      Serial.println("***********");
+    }
+    delay(1000);
+    // mqtt.callback("earth", x, '2');
+    
+    
+  }*/
   sleep(); // UC20 sleep  
  }
 
  
- count += 0.1; Serial.print(count); Serial.print(" ");  
+ count += 1; Serial.print(count); Serial.print(" ");  
  
  sleep_prevTime = millis();
- while(millis()-sleep_prevTime <= minTomsec(0.1))
+ while(millis()-sleep_prevTime <= minTomsec(5))
  {
-  if(millis()-led_prevTime >= 100)
-  {
-   led_prevTime = millis();
    digitalWrite(13, led_state);
    led_state = !led_state;
-  }
+   delay(2000);
  } // bedtime
 }
 
@@ -164,6 +184,7 @@ void internet_connect()
   boolean connect = false;  
   do
   {
+    delay(2000);
     Serial.println("Internet connecting"); 
     connect = net.Connect();
   } while(!connect);
@@ -232,9 +253,9 @@ void data_package(String lat, String lon, float V1,  float V2,  float V3,  float
   String _V2  = ",\"V2\":"  + String(V2,  DP);
   String _V3  = ",\"V3\":"  + String(V3,  DP);
   String _V4  = ",\"V4\":"  + String(V4,  DP);
-  String _V5  = ",\"V5\":"  + String(V5,  DP);
-  String _V6  = ",\"V6\":"  + String(V6,  DP)+"}";
-  String _V7  = "{\"V7\":"  + String(V7,  DP);
+  String _V5  = ",\"V5\":"  + String(V5,  DP)+"}";
+  String _V6  = "{\"V6\":"  + String(V6,  DP);
+  String _V7  = ",\"V7\":"  + String(V7,  DP);
   String _V8  = ",\"V8\":"  + String(V8,  DP);
   String _V9  = ",\"V9\":"  + String(V9,  DP);
   String _V10 = ",\"V10\":" + String(V10, DP);
@@ -244,6 +265,17 @@ void data_package(String lat, String lon, float V1,  float V2,  float V3,  float
   String _V14 = ",\"V14\":" + String(V14, DP)+"}";
   // convert variable  
   
-  pay[0] = lat + lon + _V1 + _V2 + _V3 + _V4 + _V5 + _V6;
-  pay[1] = _V7 + _V8 + _V9 + _V10 + _V11 + _V12 + _V13 + _V14;
+  pay[0] = lat + lon + _V1 + _V2 + _V3  + _V4  + _V5;
+  pay[1] = _V6 + _V7 + _V8 + _V9 + _V10 + _V11 + _V12 + _V13 + _V14;
+}
+void callback(String topic ,char *payload,unsigned char length)
+{
+  Serial.println();
+  Serial.println(F("%%%%%%%%%%%%%%%%%%%%%%%%%%%%"));
+  Serial.print(F("Topic --> "));
+  Serial.println(topic);
+  payload[length]=0;
+  String str_data(payload);
+  Serial.print(F("Payload --> "));
+  Serial.println(str_data);
 }
