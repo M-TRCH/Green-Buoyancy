@@ -8,34 +8,26 @@
 #include <uc_mqtt.h>
 #include <gnss.h>
 // UC20 Library
-#define APN  "internet"
-#define USER ""
-#define PASS ""
+#define APN  "internet" // leave it as it is, may change according to the service provider
+#define USER ""  // leave it empty for AIS, may change according to the service provider
+#define PASS ""  // leave it empty for AIS, may change according to the service provider
 // Internet parameter
-#define mqtt_server   "34.126.110.212"
-#define mqtt_port     "1883"
+#define mqtt_server   "34.126.110.212" // w.r.t. server setting
+#define mqtt_port     "1883"  // fixed port for sending the data package to server
 #define mqtt_ID       ""
-#define mqtt_user     "greenbuoy"
-#define mqtt_password "1234"
+#define mqtt_user     "greenbuoy" // w.r.t. server setting
+#define mqtt_password "1234" // w.r.t. server setting
+#define timeout_gpsFix 20000 // TODO: spare enough time to get gps fix. [ms] timeout for getting the gps fix
+#define timeout_internet 5000
+#define timeout_server 20000 
 // Server parameter
 
 GNSS gps;
 INTERNET net;
 UCxMQTT mqtt;
 // UC20 Object
-Uart mySerial(&sercom0, 5, 6, SERCOM_RX_PAD_1, UART_TX_PAD_0);
+Uart mySerialGSM(&sercom0, 5, 6, SERCOM_RX_PAD_1, UART_TX_PAD_0);
 // NANO 33 Hardware serial object
-
-void SERCOM0_Handler(); 
-void wake();
-void internet_connect();
-void server_connect();
-String get_value(String data, char separate, int index);
-void sleep();
-unsigned long minTomsec(float _min);
-void data_package(String lat, String lon, float V1,  float V2,  float V3,  float V4,  float V5,  float V6,  float V7,
-                                float V8, float V9, float V10, float V11, float V12, float V13, float V14, String *pay);
-// Prototype functions 
 
 void setup()
 {
@@ -43,53 +35,67 @@ void setup()
   pinPeripheral(6, PIO_SERCOM_ALT);
   // Set hardware serial ports
   Serial.begin(9600); 
-  gsm.begin(&mySerial, 9600);
+  gsm.begin(&mySerialGSM, 9600);
   // Default baudrate
 
-  pinMode(13, OUTPUT);
-  // Set LED pin
 }
 
-
-const unsigned long interval_time = minTomsec(30);
+const unsigned long interval_time = minTomsec(1);
 long previous_time = -interval_time;
 float count = 0.0f;
 // interval active
-boolean led_state = 1;
-// LED Blink
+
+boolean led_state = 1; // LED Blink
 unsigned long sleep_prevTime = millis();
 // interval sleep
 
+String longitudePREV = "100.8772571", latitudePREV = "13.1298563";
 
 void loop()
 {
  if(millis()-previous_time >= interval_time)
  {
   previous_time = millis();
-  wake(); // UC20 wake up  
-
+  GSM_wake(); // UC20 wake up  
   
   Serial.print("GPS Starting");
-  String gps_data, longitude, latitude = "";
+  String gps_data, longitudeNOW = "", latitudeNOW = "";
   unsigned long gps_time, gps_start = millis();
-  do
+  bool gpsFix = false;
+  while(!gpsFix)
   {
-   delay(3000);
-   Serial.print(".");
+   delay(3000); Serial.print(".");
    gps_data = gps.GetPosition();
-   latitude  = get_value(gps_data, ',', 1 );
-   longitude = get_value(gps_data, ',', 2 );
+   latitudeNOW  = get_LatLon(gps_data, ',', 1);
+   longitudeNOW = get_LatLon(gps_data, ',', 2);
    gps_time = millis()-gps_start;
-  } while(latitude == "" && longitude == "" && gps_time < 300000); 
-  Serial.println("\nlatitude : " + latitude);
-  Serial.println("longitude : " + longitude);
-  Serial.println("GPS Started\n");
-  // GPS setup
 
-  
-  String lat = "13.8019";
-  String lon = "100.5548"; // โรงจอดรถไฟฟ้า BTS
-  if(latitude != "" && longitude != ""){ lat = latitude; lon = longitude; }  
+   if(latitudeNOW != "" && longitudeNOW != "")
+   {
+    gpsFix = true;
+    Serial.println("\nGPS Fixed");
+   }
+   else if(gps_time >= timeout_gpsFix)
+   { 
+    Serial.println("\nGPS Timeout!");
+    break;
+   }
+  }
+
+  if(!gpsFix)
+  {
+   latitudeNOW = latitudePREV;
+   longitudeNOW = longitudePREV;
+  }
+  else
+  {
+   latitudePREV = latitudeNOW;
+   longitudePREV = longitudeNOW;
+  }
+  Serial.println("\nlatitude : " + latitudeNOW);
+  Serial.println("longitude : " + longitudeNOW);
+  Serial.println("GPS Started\n");
+
   float V1 = float(millis())/60000.0f;
   float V2 = count;
   float V3 = float(gps_time)/1000.0f;
@@ -106,53 +112,29 @@ void loop()
   float V14 = random(   0,  1000)/100.0f;
   // define variable
 
-
-  String payload[2];
-  data_package(lat, lon, V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, payload);
-  Serial.println("payload(0)[info]: "  + payload[0]); Serial.println(payload[0].length());
-  Serial.println("payload(1)[info]: "  + payload[1]); Serial.println(payload[1].length());
+  uint8_t max_count = 2; 
+  String payload[max_count];
+  construct_data_package(latitudeNOW, longitudeNOW, V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, payload);
   // data compile
 
-
-  internet_connect(); server_connect();
-  // 
-  mqtt.Publish("data" , payload[0]); delay(10);
-  mqtt.Publish("data2", payload[1]);
+  boolean internetConnected = internet_connect(timeout_internet);  // TODO: should we use the connection status 
+  boolean serverConnected = server_connect(timeout_server);  // TODO: should we use the connection status
+  for(uint8_t i=0; i < max_count; i++)
+  {
+   mqtt.Publish("data", payload[i]); 
+   Serial.println("payload[info]: "  + payload[i]); 
+   Serial.println(payload[i].length());
+   delay(10);
+  }
   Serial.println("Published Success");
   // send data
-  
 
-  /*internet_connect(); server_connect();
-  
-  mqtt.callback = callback;
-  
-  while(1)
-  {
-    
-    char x[2] = {'q','w'};
-    
-    
-    
-    mqtt.Subscribe("earth");
-    if(gsm.available())
-    {
-      Serial.write(gsm.read());
-      // mqtt.callback("earth",, '5');
-      Serial.println("***********");
-    }
-    delay(1000);
-    // mqtt.callback("earth", x, '2');
-    
-    
-  }*/
-  sleep(); // UC20 sleep  
+  GSM_sleep(); // UC20 sleep  
  }
 
- 
- count += 1; Serial.print(count); Serial.print(" ");  
- 
+ //TODO: need to verify if the delay is necessary, or just let it spin without delay is Okay
  sleep_prevTime = millis();
- while(millis()-sleep_prevTime <= minTomsec(5))
+ while(millis()-sleep_prevTime <= minTomsec(0.2))
  {
    digitalWrite(13, led_state);
    led_state = !led_state;
@@ -163,9 +145,9 @@ void loop()
 // Function
 void SERCOM0_Handler()
 {
-  mySerial.IrqHandler();
+  mySerialGSM.IrqHandler();
 } 
-void wake()
+void GSM_wake()
 {
   gsm.PowerOn();          Serial.println("\nPower[status]: on");
   while(gsm.WaitReady()); Serial.println("Power[status]: ready");
@@ -176,45 +158,63 @@ void wake()
   Serial.print("Get operator: ");   Serial.println(gsm.GetOperator());
   Serial.println();
 }
-void internet_connect()
+
+boolean internet_connect(unsigned long timeout)
 {
   Serial.println("Set APN & Password");
   net.Configure(APN, USER, PASS);
-
-  boolean connect = false;  
-  do
-  {
-    delay(2000);
-    Serial.println("Internet connecting"); 
-    connect = net.Connect();
-  } while(!connect);
   
-  Serial.println("Internet connected");
+  boolean connected = false;
+  unsigned long start_time = millis();  
+  while(!connected) // TODO: include timeout mechanism into this block (to prevent dead lock when the internet connection cannot estrablish)
+  {
+    Serial.println("Internet connecting"); delay(2000);
+    if(net.Connect())
+    { 
+     Serial.println("Internet connected");
+     connected = true;
+    }
+    else if(millis()-start_time >= timeout)
+    { 
+     Serial.println("Internet connection timeout!"); 
+     break;
+    }
+  }
   Serial.print("Get IP: "); Serial.println(net.GetIP());
   Serial.println();
+  return connected;
 }
-void server_connect()
+
+boolean server_connect(unsigned long timeout)
 {
-  boolean connect = false;
-  Serial.println(F("Server connecting"));
-  do
+  boolean connected = false;
+  unsigned long start_time = millis();  
+  while(!connected)  // TODO: include timeout mechanism into this block (to prevent dead lock when the connection cannot estrablish)
   {  
-     if(mqtt.DisconnectMQTTServer())
-     {
-        mqtt.ConnectMQTTServer(mqtt_server, mqtt_port);
-     }
-     connect = mqtt.ConnectState();
-     Serial.print("Server connect[state]: ");
-     Serial.println(connect);
-     delay(500);
-  } while(!connect); 
-  
-  Serial.println("Server connected");
+   if(mqtt.DisconnectMQTTServer())
+   {
+    mqtt.ConnectMQTTServer(mqtt_server, mqtt_port);
+   }
+   if(mqtt.ConnectState())
+   { 
+    connected = true;
+    Serial.println("Server connected\n");
+   }
+   else if(millis()-start_time >= timeout)
+   { 
+    Serial.println("Server timeout!\n"); 
+    break;
+   }
+   Serial.print("Server connect[state]: ");
+   Serial.println(connected);
+   delay(500);
+  } 
   unsigned char re_turn = mqtt.Connect(mqtt_ID, mqtt_user, mqtt_password);
-  //Serial.println(mqtt.ConnectReturnCode(re_turn)); 
-  Serial.println();
+  // Serial.println(mqtt.ConnectReturnCode(re_turn)); 
+  return connected;
 }
-String get_value(String data, char separate, int index)
+
+String get_LatLon(String data, char separate, int index)
 {
   int found = 0;
   int strIndex[] = {0, -1};
@@ -231,18 +231,21 @@ String get_value(String data, char separate, int index)
   }
   return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
 }
-void sleep()
+
+void GSM_sleep()
 {
   mqtt.clear_buffer();
   net.DisConnect(); Serial.println("Server disconnected");
   gsm.PowerOff();   Serial.println("Power[status]: off");
   Serial.println();
 }
+
 unsigned long minTomsec(float _min)
 {
   return _min*60000;  
 }
-void data_package(String lat, String lon, float V1,  float V2,  float V3,  float V4,  float V5,  float V6,  float V7,
+
+void construct_data_package(String lat, String lon, float V1,  float V2,  float V3,  float V4,  float V5,  float V6,  float V7,
                                 float V8, float V9, float V10, float V11, float V12, float V13, float V14, String *pay)
 {
   uint8_t DP = 2; // Ex. 9.47
@@ -263,19 +266,9 @@ void data_package(String lat, String lon, float V1,  float V2,  float V3,  float
   String _V12 = ",\"V12\":" + String(V12, DP);
   String _V13 = ",\"V13\":" + String(V13, DP);
   String _V14 = ",\"V14\":" + String(V14, DP)+"}";
-  // convert variable  
-  
+  // convert variable
+
+  // TODO: may need to create more line as the message string gets bigger
   pay[0] = lat + lon + _V1 + _V2 + _V3  + _V4  + _V5;
   pay[1] = _V6 + _V7 + _V8 + _V9 + _V10 + _V11 + _V12 + _V13 + _V14;
-}
-void callback(String topic ,char *payload,unsigned char length)
-{
-  Serial.println();
-  Serial.println(F("%%%%%%%%%%%%%%%%%%%%%%%%%%%%"));
-  Serial.print(F("Topic --> "));
-  Serial.println(topic);
-  payload[length]=0;
-  String str_data(payload);
-  Serial.print(F("Payload --> "));
-  Serial.println(str_data);
 }
