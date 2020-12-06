@@ -27,20 +27,21 @@ SoftwareSerial serviceSerial(10, 11);
 #define MQTT_PASSWORD   "1234"
 #define MQTT_TOPIC      "data"
 //------------- timeout setting --------------//
-#define timeout_powerOn       45000
-#define timeout_ready         30000
-#define timeout_internet      15000
+#define timeout_powerOn       90000
+#define timeout_ready         60000
+#define timeout_internet      25000
 #define delayTime_internet    3000
-#define timeout_server        15000
+#define timeout_server        25000
 #define delayTime_server      500
-#define timeout_gps           50000
+#define timeout_gps           60000
 #define delayTime_gps         2000
 //--------- state of sequence ---------// 
 unsigned long prevTime = millis();
 boolean prev_success = false;
+uint8_t oneTime = 0;
 //----------- gps variable -----------//
 float latitude = -1.00000f, longitude = -1.00000f;  
-uint8_t gpsFix = 0; 
+uint8_t gpsFix = 0;
 //-------- web based variable --------//
 #define VIRTUAL_VALUE_MAX   12 
 #define GPS_DP              5
@@ -157,10 +158,10 @@ void internet_connect(unsigned long net_timeout, unsigned long delayTime)
 {
   if(prev_success)
   {
-    Serial.print(F("GetOperator --> ")); Serial.println(gsm.GetOperator());
-    Serial.print(F("SignalQuality --> ")); Serial.println(gsm.SignalQuality()); 
-    Serial.println(F("Disconnect net")); net.DisConnect(); 
-    Serial.println(F("Set APN and Password")); net.Configure(APN,USER,PASS); 
+    // Serial.print(F("GetOperator --> ")); Serial.println(gsm.GetOperator());
+    // Serial.print(F("SignalQuality --> ")); Serial.println(gsm.SignalQuality()); 
+    // Serial.println(F("Disconnect net")); net.DisConnect(); 
+    Serial.println(F("Set APN and Password")); net.Configure(APN, USER, PASS); 
   
     Serial.println(F("Internet state : connecting"));
     
@@ -180,7 +181,7 @@ void internet_connect(unsigned long net_timeout, unsigned long delayTime)
         break;
       }
     }
-    Serial.println(F("Show My IP")); Serial.println(net.GetIP());   
+    // Serial.println(F("Show My IP")); Serial.println(net.GetIP());   
   } 
 }
 void server_connect(unsigned long sv_timeout, unsigned long delayTime)
@@ -274,80 +275,93 @@ void data_publish(String topic, uint8_t index, uint8_t value)
   mqtt.Publish(topic, payload);  
   delay(1);
 }
+void gsmSerial_start()
+{
+  serviceSerial.end();              // software serial end(nano33 comunication)
+  gsm.begin(&gsmSerial, BAUD_RATE); // software serial begin(gsm comunication)
+}
+void nanoSerial_start()
+{
+  gsmSerial.end();                // software serial end(gsm comunication)
+  serviceSerial.begin(BAUD_RATE); // software serial begin(nano33 comunication)
+}
 void send_state_to_nano33()
 {
-  serviceSerial.write('C');
-  uint8_t val_A = 0, val_B = 0;
-  if(prev_success){ val_A = 1; } 
-  else            { val_A = 2; }
-  if(gpsFix)      { val_B = 3; }
-  else            { val_B = 4; }
-  serviceSerial.println(val_A);
-  serviceSerial.println(val_B);
-  serviceSerial.println(val_A+val_B);
-  serviceSerial.write('#');
+  if(!oneTime)
+  {
+    gsmSerial_start();
+    gsm_wakeup(timeout_powerOn, timeout_ready);    
+    nanoSerial_start();
+    oneTime = 1;
+  }
+  else
+  {
+    serviceSerial.write('c');
+    
+    uint8_t val_A = 0, val_B = 0;
+    if(prev_success){ val_A = 1; } 
+    else            { val_A = 2; }
+    if(gpsFix)      { val_B = 3; }
+    else            { val_B = 4; }
+    serviceSerial.println(val_A);
+    serviceSerial.println(val_B);
+    serviceSerial.write('#');
+  }
 }
 void send_gps_data_to_nano33()
 {
-  serviceSerial.write('G');
+  serviceSerial.write('g');
   serviceSerial.println(latitude);
   serviceSerial.println(longitude);
-  serviceSerial.println(latitude+longitude);
   serviceSerial.write('#');
+}
+void server_connect_request()
+{
+  gsmSerial_start();
+
+  internet_connect(timeout_internet, delayTime_internet); // wait internet conecting
+  server_connect(timeout_server, delayTime_server);       // wait mqtt server conecting
+
+  nanoSerial_start();
+  if(prev_success) serviceSerial.write('s');
 }
 void receive_data_from_nano33()
 { 
+  serviceSerial.write('p');
   //////////////////////////////////////////////////
-  sum = 0, checksum = 0;
-  
   for(int i=0; i<VIRTUAL_VALUE_MAX; i++)
   {
     V[i] = serviceSerial.parseFloat();
-    sum += V[i];
     Serial.print("data receive[V");
     Serial.print(i);
     Serial.print("] : ");
     Serial.println(V[i]);
   }
-  checksum = serviceSerial.parseFloat();
-  
   serviceSerial.read(); // read \n
   serviceSerial.read(); // read \r
 
   if(serviceSerial.find('#')) 
   {
-    if((int)sum == (int)checksum) 
-    {
       prev_success = true; 
       Serial.println("\nget complete package");
-    }
-    else
-    { 
-      prev_success = false;
-      for(int i=0; i<VIRTUAL_VALUE_MAX; i++)
-      {
-        V[i] = -1;
-      }
-    }
-  } 
+  }
+   
   //////////////////////////////////////////////////
+  #define publish_interval 50
   if(prev_success)
   {
-    if(!mqtt.ConnectState()) server_connect(timeout_server, delayTime_server);
-    prev_success = true;
-    
     serviceSerial.end();
     gsm.begin(&gsmSerial, BAUD_RATE);
-    
+     
     //////////////// package publish ///////////////
     for(int i=0; i<VIRTUAL_VALUE_MAX; i++)
     {
       data_publish(MQTT_TOPIC, i, V[i], VALUE_DP);
-      delay(1);
+      delay(publish_interval);
     }
-    data_publish(MQTT_TOPIC, 12, latitude , GPS_DP); 
-    data_publish(MQTT_TOPIC, 13, longitude, GPS_DP);
-    data_publish(MQTT_TOPIC, 14, gpsFix);
+    data_publish(MQTT_TOPIC, 12, latitude , GPS_DP); delay(publish_interval);
+    data_publish(MQTT_TOPIC, 13, longitude, GPS_DP); delay(publish_interval);
+    data_publish(MQTT_TOPIC, 14, gpsFix); 
     Serial.println(F("\npublished.")); 
     ////////////////////////////////////////////////   
     
@@ -358,39 +372,40 @@ void receive_data_from_nano33()
 void setup() 
 {
   Serial.begin(BAUD_RATE);          // hardware serial begin
-  gsm.begin(&gsmSerial, BAUD_RATE); // software serial begin(gsm comunication)
-
+  gsmSerial_start();
+  
   #ifdef GSM_DEBUG_MODE
   gsm.Event_debug = debug;
   mqtt.callback = callback;
   #else
-  #endif  
+  #endif
   
-  // while(!Serial); // wait open serial monitor 
   delay(2000);
   Serial.println(F("Serial state : begin"));
   Serial.print(F("FreeMemory : "));
   Serial.print(freeMemory());  
   Serial.println(F(" KB"));  
-  delay(2000);
-  
+
   gsm_wakeup(timeout_powerOn, timeout_ready);                  // gsm wake up 
   getGPS(timeout_gps, delayTime_gps, &latitude, &longitude);   // get gps within 50 s
-  internet_connect(timeout_internet, delayTime_internet);      // wait internet conecting
-  server_connect(timeout_server, delayTime_server);            // wait mqtt server conecting
-
-  gsmSerial.end();           // software serial end(gsm comunication)
-  serviceSerial.begin(BAUD_RATE); // software serial begin(nano33 comunication)
+//  Serial.print(F("SignalQuality --> ")); Serial.println(gsm.SignalQuality());  
+//  internet_connect(timeout_internet, delayTime_internet);      // wait internet conecting
+//  server_connect(timeout_server, delayTime_server);            // wait mqtt server conecting
+  gsm.PowerOff();
+  
+  nanoSerial_start();
+  Serial.println(F("\nWaiting for command"));
 }
-void loop() 
+void loop()
 {
   if(serviceSerial.find('@')) 
   {
     delay(5);
     int ID = serviceSerial.read();
       
-         if(ID == 'C'){ send_state_to_nano33();     } // state check 
-    else if(ID == 'G'){ send_gps_data_to_nano33();  } // gps data request
-    else if(ID == 'P'){ receive_data_from_nano33(); } // push data request
-  }   
+         if(ID == 'C'){ Serial.println("Command : C ->Get Ready<-");  send_state_to_nano33();     } // state check 
+    else if(ID == 'G'){ Serial.println("Command : G ->Get GPS<-");    send_gps_data_to_nano33();  } // gps data request
+    else if(ID == 'S'){ Serial.println("Command : S ->Connection<-"); server_connect_request();   } // internet and server connect request
+    else if(ID == 'P'){ Serial.println("Command : P ->Publish<-");    receive_data_from_nano33(); } // push data request
+  }
 }
